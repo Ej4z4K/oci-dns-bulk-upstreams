@@ -2,7 +2,7 @@
 
 ## Review the release content
 
-Use the root README as the landing page. It contains prerequisites, shared configuration and phase commands. Link the code explanation, Mac walkthrough and generic verification guide. Review the blog, license, dependency pins, example placeholders and test status before publication.
+Use the root README as the landing page. It contains prerequisites, shared configuration and phase commands. Link the code explanation, Mac walkthrough and generic verification guide. Review the license, dependency pins, example placeholders and test status before publication.
 
 Keep API/SSH private keys, TSIG secrets, real inventories, configuration and logs under protected ignored storage. Inspect staged content; `.gitignore` does not remove already tracked material.
 
@@ -12,7 +12,7 @@ Run from the package root:
 
 ```bash
 git init
-git add README.md LICENSE requirements.txt .gitignore scripts tests examples docs blog presentations .github
+git add README.md LICENSE requirements.txt .gitignore scripts tests examples docs presentations .github
 git status --short
 git diff --cached --stat
 git diff --cached
