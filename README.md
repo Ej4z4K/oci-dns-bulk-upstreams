@@ -7,9 +7,9 @@ All phase inputs come from command-line flags or a non-secret JSON configuration
 **Workflow:** export/review zone OCIDs → preview/add target → verify target → preview/remove source → verify again.
 
 
-[Customer presentation with interactive HLD using the Oracle template](presentations/OCI_DNS_Upstream_Migration_Customer_Oracle_HLD.pptx)
+[Presentation and HLD diagrams (PDF)](presentations/OCI_DNS_Upstream_Migration.pdf)
 
-The HLD views are on slides 5–8. Open the deck in PowerPoint Slide Show and click the phase tabs or **Next phase** to follow source-only, overlap, and target-only transfer flows. Clicking the slide background also advances. The diagrams and connectors are editable; the tabs use internal slide links. Native PowerPoint playback has not been tested in this environment.
+The HLD views are on pages 5–8. Download the PDF and open it in a PDF reader, then click the phase tabs or **Next phase** to follow source-only, overlap, and target-only transfer flows. The phase tabs link between PDF pages. Bookmarks provide navigation to every section, and the final page links to the official reference documentation.
 
 ## Get the project
 
