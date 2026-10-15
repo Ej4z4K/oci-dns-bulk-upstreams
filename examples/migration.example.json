@@ -1,0 +1,16 @@
+{
+  "compartment_id": "ocid1.compartment.oc1..REPLACE_ME",
+  "profile": "DEFAULT",
+  "region": "REPLACE_WITH_DNS_MANAGEMENT_REGION",
+  "source_ip": "192.0.2.10",
+  "target_ip": "192.0.2.20",
+  "zone_ids_file": "zone-ids.txt",
+  "name_prefix": "example",
+  "expected_count": 2,
+  "output_dir": "results",
+  "api_delay": 0.6,
+  "verification": {
+    "record_name": "_oci-transfer-check",
+    "marker": "REPLACE_WITH_FRESH_MARKER"
+  }
+}

@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.oci/
+*.pem
+*.key
+*.keys
+*.ppk
+local/
+dns-batch-results/
+zone-ids*.txt
+*.inventory.json
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+crash.log
+.DS_Store
+
+*.plan
+
+# Office temporary lock files
+~$*

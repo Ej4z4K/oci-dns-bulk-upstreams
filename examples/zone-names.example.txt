@@ -1,0 +1,3 @@
+# Exact zone names, not patterns; use domains you administer.
+example.com
+example.net
