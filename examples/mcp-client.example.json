@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "oci-dns-readonly": {
+      "command": "/absolute/path/to/oci-dns-bulk-upstreams/.venv/bin/python",
+      "args": [
+        "/absolute/path/to/oci-dns-bulk-upstreams/scripts/oci_dns_mcp.py",
+        "--compartment-id", "YOUR_COMPARTMENT_OCID",
+        "--profile", "YOUR_READ_ONLY_PROFILE",
+        "--region", "YOUR_DNS_MANAGEMENT_REGION"
+      ]
+    }
+  }
+}

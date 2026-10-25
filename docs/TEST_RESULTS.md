@@ -20,6 +20,18 @@ The suite contains 42 offline tests. It does not require OCI credentials, DNS ac
 - Rejection of old/incomplete/unrelated transfer evidence and proof-level reporting.
 - Compatibility behavior for previous entry points and helper functions.
 
+## Read-only MCP suite
+
+Install `requirements-mcp.txt` and run:
+
+```bash
+python -m unittest discover -s tests_mcp -v
+```
+
+On 25 October 2026, all 42 existing tests and 16 MCP tests passed locally on macOS with Python 3.12.14 and MCP SDK 2.3.0. The MCP tests cover scoped and paginated reads, secret filtering, schema bounds, rejected extra arguments, DNS failure/concurrent-change handling, and the freshness-only proof boundary. They exercise both an in-process client and a real stdio subprocess handshake with no OCI credentials.
+
+The GitHub Actions workflow runs both suites on Linux and Windows with Python 3.11. The MCP server has not been exercised against a live OCI tenancy. Fake DNS/API responses establish application behavior, not actual DNS transfer success.
+
 ## Live acceptance criteria
 
 Offline tests validate implementation contracts; they do not establish deployment success. Rehearse with one controlled selected zone, then a small reviewed batch. Require:

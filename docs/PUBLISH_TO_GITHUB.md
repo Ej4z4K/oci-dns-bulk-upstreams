@@ -12,7 +12,7 @@ Run from the package root:
 
 ```bash
 git init
-git add README.md LICENSE requirements.txt .gitignore scripts tests examples docs presentations .github
+git add README.md LICENSE requirements.txt requirements-mcp.txt .gitignore scripts tests tests_mcp examples docs presentations .github
 git status --short
 git diff --cached --stat
 git diff --cached

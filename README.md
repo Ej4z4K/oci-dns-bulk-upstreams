@@ -255,10 +255,11 @@ See [verification and rollback](docs/VERIFY_AND_ROLLBACK.md). Recover using the 
 | `scripts/oci_dns_verify_upstream.py` | Signed AXFR, stage checks and optional timestamped log proof |
 | `scripts/oci_dns_transfer_evidence.py` | Completed signed transfer evidence from BIND messages |
 | `scripts/verify_dns.py` | Legacy read-only SOA/TXT checker with configurable TXT owner |
+| `scripts/oci_dns_mcp.py` | Optional local MCP server for scoped inventory and SOA/TXT verification |
 
-Detailed [code explanations](docs/CODE_EXPLANATION.md), [generic verification](docs/GENERIC_VERIFICATION.md), [runbook](docs/RUNBOOK.md), [test evidence](docs/TEST_RESULTS.md), and [future GitHub publishing](docs/PUBLISH_TO_GITHUB.md) are included. Use the [Mac terminal walkthrough](docs/MAC_TERMINAL.md) to rehearse the phase scripts.
+Detailed [code explanations](docs/CODE_EXPLANATION.md), [generic verification](docs/GENERIC_VERIFICATION.md), [runbook](docs/RUNBOOK.md), [test evidence](docs/TEST_RESULTS.md), and [GitHub publishing](docs/PUBLISH_TO_GITHUB.md) are included. Use the [Mac terminal walkthrough](docs/MAC_TERMINAL.md) to rehearse the phase scripts.
 
-## 9. Test and publish later
+## 9. Offline tests and publishing
 
 ```bash
 python -m unittest discover -s tests -v
@@ -266,7 +267,27 @@ python -m unittest discover -s tests -v
 
 42 offline tests pass as of 13 October 2026. They include configuration precedence, arbitrary real-domain and IPv6 fixtures, key preservation, ETag concurrency, missing selection rejection, stale-log rejection and verification proof boundaries. The new generalized workflow has not been run end-to-end against a live production domain, IPv6 upstream, Windows or Oracle Linux operator.
 
-The package is prepared for a future GitHub repository. It has not been published. Keep `local/`, `.oci/`, private keys, real inventories, logs, TSIG manifests and Terraform state out of Git; Windows users must also restrict local directory ACLs. See the included `.gitignore` and publishing guide. Example addresses/names/OCIDs must be replaced.
+The project is published at [Ej4z4K/oci-dns-bulk-upstreams](https://github.com/Ej4z4K/oci-dns-bulk-upstreams). Keep `local/`, `.oci/`, private keys, real inventories, logs, TSIG manifests and Terraform state out of Git; Windows users must also restrict local directory ACLs. See the included `.gitignore` and publishing guide. Example addresses/names/OCIDs must be replaced.
+
+## 10. Optional read-only MCP server
+
+The local stdio server exposes `list_secondary_zones`, `get_secondary_zone` and `verify_secondary_zone`. The operator fixes the compartment, profile and region at startup. Tools list current upstreams and check authoritative SOA/TXT answers without modifying OCI zones or reading TSIG secrets.
+
+```bash
+python -m pip install -r requirements-mcp.txt
+python scripts/oci_dns_mcp.py \
+  --compartment-id YOUR_COMPARTMENT_OCID \
+  --profile YOUR_READ_ONLY_PROFILE \
+  --region YOUR_DNS_MANAGEMENT_REGION
+```
+
+The process waits for MCP messages rather than displaying an interactive prompt. Normally an MCP client launches it. See the [MCP setup and test guide](docs/MCP_SERVER.md) for macOS/Linux/Windows instructions, read-only IAM permissions, pagination, client configuration and tool examples. SOA/TXT verification establishes record freshness, not actual upstream selection. The existing signed AXFR and transfer-log checks remain available through the migration CLI.
+
+Run the additional offline MCP suite after installing its optional dependencies:
+
+```bash
+python -m unittest discover -s tests_mcp -v
+```
 
 ## Oracle references and scope
 
