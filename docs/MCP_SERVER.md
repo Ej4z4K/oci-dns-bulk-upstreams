@@ -67,7 +67,7 @@ python scripts/oci_dns_mcp.py \
 
 The second command waits for MCP messages on stdin. It is not an interactive DNS prompt. Stop it with Ctrl+C; normally your MCP client starts and stops this process itself. Stdout is reserved for MCP messages, and diagnostics go to stderr.
 
-Omit `--region` to use the profile's region. Use `--config-file /absolute/path/to/config` for a non-default OCI config file. Credentials load on the first OCI read, so tool discovery can succeed even when a later API call reports an authentication error.
+Omit `--region` to use the profile's region. Use `--config-file /absolute/path/to/config` for a non-default OCI config file. The server waits one second between OCI reads by default. Set `--api-delay 2` at startup to slow reads further when other clients share the API limit. This is an operator setting, not an MCP tool argument. Credentials load on the first OCI read, so tool discovery can succeed even when a later API call reports an authentication error.
 
 ## 4. Connect a local MCP client
 
@@ -107,7 +107,7 @@ To fetch the following page, call `list_secondary_zones` again with the returned
 {"limit": 10, "page": "TOKEN_FROM_NEXT_PAGE"}
 ```
 
-Continue until `next_page` is null. A page reads the zone list once, then reads each returned zone for its current upstreams. The default page therefore uses at most 21 OCI calls. Listing is not an atomic snapshot across pages. An error stops that call instead of returning a misleading complete inventory.
+Continue until `next_page` is null. A page reads the zone list once, then reads each returned zone for its current upstreams. The default page therefore uses at most 21 logical OCI reads before retries. A ten-zone page normally takes at least ten seconds of pacing, plus network time and any retry delays. Listing is not an atomic snapshot across pages. An error stops that call instead of returning a misleading complete inventory.
 
 Inspect a zone using `get_secondary_zone`:
 
@@ -132,7 +132,13 @@ Replace the sample serial with the zone's actual new serial. The marker owner mu
 
 `status: pass` with `proof_level: authoritative-soa-txt` means every assigned OCI nameserver returned the expected serial and marker, with unchanged zone metadata during that check. `oci_target_transfer_observed` is null because this tool does not observe transfers. It does not perform signed AXFR, validate a migration phase's expected upstream set, or establish which upstream OCI used. Use the existing [signed target and transfer-log verification workflow](GENERIC_VERIFICATION.md) for those stronger checks.
 
-An ordinary DNS mismatch produces a structured `status: fail`. Invalid inputs, authentication failures and rejected scope produce MCP tool errors. Raw OCI error bodies and credential-loading exception details are suppressed. OCI calls use connect/read timeouts of 5/20 seconds with SDK retries disabled; existing DNS queries use 8-second transport timeouts. Actual elapsed time can include OS name resolution and queued checks.
+An ordinary DNS mismatch produces a structured `status: fail`. Invalid inputs, authentication failures and rejected scope produce MCP tool errors. Raw OCI error bodies and credential-loading exception details are suppressed. OCI calls use connect/read timeouts of 5/20 seconds. Each logical read has up to four SDK attempts, a 30-second elapsed-time retry check and exponential backoff with jitter capped at eight seconds between attempts. HTTP 429 and retryable server errors are retried; HTTP 400/401/403/404 are not. The elapsed-time check is not a hard request cancellation deadline: an in-flight read can finish after that budget. Existing DNS queries use 8-second transport timeouts. Actual tool duration also includes pacing, OS name resolution and queued checks.
+
+### HTTP 429 troubleshooting
+
+HTTP 429 means OCI is throttling API reads. The server applies pacing to both the list request and each subsequent zone-detail request. SDK backoff handles transient throttling inside each read. If throttling persists after the bounded retries, the tool returns a specific rate-limit error rather than permission advice.
+
+Wait before repeating the request, use a smaller page, or restart the server with `--api-delay 2`. If your MCP host cancels a slow listing, increase its tool timeout or request fewer zones per page. These controls limit this server's traffic; they cannot reserve capacity against other clients using OCI.
 
 ## 6. Offline tests
 
@@ -149,5 +155,6 @@ The MCP suite uses fake OCI responses and DNS checks, an in-process MCP client, 
 - [MCP tools, schemas and annotations](https://py.sdk.modelcontextprotocol.io/servers/tools/)
 - [MCP client and stdio transport](https://py.sdk.modelcontextprotocol.io/client/)
 - [OCI DNS IAM operations](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/dnspolicyreference.htm)
+- [OCI Python SDK retries](https://docs.oracle.com/en-us/iaas/tools/python/latest/sdk_behaviors/retries.html)
 
 Sources checked 25 October 2026. The application exposes only the registered read operations; read-only MCP annotations describe that behavior and do not replace OCI IAM enforcement.

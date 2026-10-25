@@ -5,14 +5,14 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from mcp import Client, StdioServerParameters
 import oci
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from oci_dns_mcp import ReadError, ReadOnlyDns, Settings, build_server
+from oci_dns_mcp import ReadError, ReadOnlyDns, Settings, build_server, read_retry_strategy
 
 COMPARTMENT = "ocid1.compartment.oc1..example"
 ZONE_ID = "ocid1.dns-zone.oc1..example"
@@ -37,7 +37,7 @@ def setup_service(dns_check=None):
     backend.list_zones.return_value = NS(data=[NS(id=ZONE_ID)], headers={"opc-next-page": "next-token"})
     query = dns_check or Mock(return_value={"status": "pass", "soaSerial": 7, "txt": ["fresh"]})
     factory = Mock(return_value=backend)
-    settings = Settings(COMPARTMENT)
+    settings = Settings(COMPARTMENT, api_delay=0)
     return ReadOnlyDns(settings, factory, query), backend, factory, query
 
 
@@ -163,7 +163,7 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_tools_reject_scope_and_execution_override_arguments(self):
         service, backend, _, _ = setup_service()
         async with Client(build_server(Settings(COMPARTMENT), service)) as client:
-            for name in ("compartment_id", "profile", "region", "apply", "command", "path"):
+            for name in ("compartment_id", "profile", "region", "apply", "command", "path", "api_delay"):
                 result = await client.call_tool("get_secondary_zone", {"zone_id": ZONE_ID, name: "override"})
                 self.assertTrue(result.is_error, name)
             backend.get_zone.assert_not_called()
@@ -177,6 +177,18 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result.is_error)
                 self.assertNotIn(SECRET, str(result.content))
 
+    async def test_429_is_reported_as_throttling_without_permission_advice(self):
+        service, backend, _, _ = setup_service()
+        backend.get_zone.side_effect = oci.exceptions.ServiceError(429, "TooManyRequests", {}, SECRET)
+        async with Client(build_server(Settings(COMPARTMENT), service)) as client:
+            result = await client.call_tool("get_secondary_zone", {"zone_id": ZONE_ID})
+            self.assertTrue(result.is_error)
+            text = str(result.content)
+            self.assertIn("rate limiting", text)
+            self.assertIn("--api-delay", text)
+            self.assertNotIn(SECRET, text)
+            self.assertNotIn("permissions", text)
+
     async def test_actual_stdio_handshake_needs_no_oci_credentials(self):
         async def exercise():
             params = StdioServerParameters(command=sys.executable, args=[
@@ -188,6 +200,83 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(result.is_error)
                 self.assertIn("Supply a DNS zone OCID", str(result.content))
         await asyncio.wait_for(exercise(), timeout=20)
+
+
+class ThrottlingTests(unittest.TestCase):
+    @staticmethod
+    def error(status):
+        return oci.exceptions.ServiceError(status, "TooManyRequests" if status == 429 else "Other", {}, SECRET)
+
+    def test_all_reads_share_pacing(self):
+        _, backend, factory, _ = setup_service()
+        now, waits = [0.0], []
+        def sleep(seconds):
+            waits.append(seconds)
+            now[0] += seconds
+        service = ReadOnlyDns(Settings(COMPARTMENT), factory, clock=lambda: now[0], sleep=sleep)
+        service.list_zones(1)
+        service.get_zone(ZONE_ID)
+        self.assertEqual(waits, [1.0, 1.0])
+        self.assertEqual(backend.get_zone.call_count, 2)
+
+    def test_failed_read_is_also_paced(self):
+        _, backend, factory, _ = setup_service()
+        backend.get_zone.side_effect = [self.error(401), NS(data=zone())]
+        now, waits = [0.0], []
+        def sleep(seconds):
+            waits.append(seconds)
+            now[0] += seconds
+        service = ReadOnlyDns(Settings(COMPARTMENT, api_delay=2), factory,
+                              clock=lambda: now[0], sleep=sleep)
+        with self.assertRaises(oci.exceptions.ServiceError):
+            service.get_zone(ZONE_ID)
+        service.get_zone(ZONE_ID)
+        self.assertEqual(waits, [2.0])
+
+    def test_invalid_delay_is_rejected(self):
+        for value in (-1, 61, True, float('nan'), float('inf')):
+            with self.assertRaises(ReadError):
+                Settings(COMPARTMENT, api_delay=value)
+
+    def test_429_recovers_with_bounded_exponential_backoff(self):
+        operation = Mock(__name__="read", side_effect=[self.error(429), self.error(429), "ok"])
+        with patch('oci.retry.retry.time.sleep') as sleep:
+            self.assertEqual(read_retry_strategy().make_retrying_call(operation), "ok")
+        self.assertEqual(operation.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertTrue(all(0 < call.args[0] <= 8 for call in sleep.call_args_list))
+
+    def test_permanent_429_stops_after_four_attempts(self):
+        operation = Mock(__name__="read", side_effect=self.error(429))
+        with patch('oci.retry.retry.time.sleep') as sleep:
+            with self.assertRaises(oci.exceptions.ServiceError):
+                read_retry_strategy().make_retrying_call(operation)
+        self.assertEqual(operation.call_count, 4)
+        self.assertEqual(sleep.call_count, 3)
+
+    def test_auth_and_not_found_are_not_retried_but_503_is(self):
+        for status in (400, 401, 403, 404):
+            operation = Mock(__name__="read", side_effect=self.error(status))
+            with patch('oci.retry.retry.time.sleep') as sleep:
+                with self.assertRaises(oci.exceptions.ServiceError):
+                    read_retry_strategy().make_retrying_call(operation)
+            self.assertEqual(operation.call_count, 1)
+            sleep.assert_not_called()
+        operation = Mock(__name__="read", side_effect=[self.error(503), "ok"])
+        with patch('oci.retry.retry.time.sleep'):
+            self.assertEqual(read_retry_strategy().make_retrying_call(operation), "ok")
+
+    def test_actual_sdk_listing_recovers_from_429_and_returns_inventory(self):
+        client = oci.dns.DnsClient({'region': 'uk-london-1'},
+                                   signer=Mock(spec=oci.auth.signers.SecurityTokenSigner),
+                                   retry_strategy=read_retry_strategy())
+        client.base_client.call_api = Mock(__name__="call_api", side_effect=[self.error(429),
+            NS(data=[NS(id=ZONE_ID)], headers={}), NS(data=zone())])
+        service = ReadOnlyDns(Settings(COMPARTMENT, api_delay=0), lambda _: client)
+        with patch('oci.retry.retry.time.sleep'):
+            result = service.list_zones(1)
+        self.assertEqual(result['zones'][0]['zone_id'], ZONE_ID)
+        self.assertEqual(client.base_client.call_api.call_count, 3)
 
 
 if __name__ == "__main__":

@@ -5,9 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import wraps
+import math
 from pathlib import Path
 import re
 import threading
+import time
 from typing import Annotated, Any
 
 import oci
@@ -30,20 +32,34 @@ class Settings:
     profile: str = "DEFAULT"
     region: str | None = None
     config_file: str = str(Path.home() / ".oci" / "config")
+    api_delay: float = 1.0
 
     def __post_init__(self):
         if not re.fullmatch(r"ocid1\.(?:compartment|tenancy)\.[A-Za-z0-9._-]+", self.compartment_id):
             raise ReadError("Supply the permitted compartment or root tenancy OCID")
         if not self.profile.strip() or (self.region is not None and not self.region.strip()):
             raise ReadError("Profile and any region override must be nonempty")
+        if (type(self.api_delay) not in (int, float) or not math.isfinite(self.api_delay)
+                or not 0 <= self.api_delay <= 60):
+            raise ReadError("api_delay must be a finite number from 0 to 60 seconds")
+
+
+def read_retry_strategy():
+    return oci.retry.RetryStrategyBuilder(
+        max_attempts_check=True, max_attempts=4,
+        total_elapsed_time_check=True, total_elapsed_time_seconds=30,
+        retry_base_sleep_time_seconds=1, retry_max_wait_between_calls_seconds=8,
+        service_error_check=True, service_error_retry_config={429: []},
+        service_error_retry_on_any_5xx=True,
+        backoff_type=oci.retry.BACKOFF_FULL_JITTER_EQUAL_ON_THROTTLE_VALUE,
+    ).get_retry_strategy()
 
 
 def make_client(settings):
     config = oci.config.from_file(str(Path(settings.config_file).expanduser()), settings.profile)
     if settings.region:
         config["region"] = settings.region
-    # No retry loop that can silently turn a small read into an unbounded operation.
-    return oci.dns.DnsClient(config, timeout=(5, 20), retry_strategy=oci.retry.NoneRetryStrategy())
+    return oci.dns.DnsClient(config, timeout=(5, 20), retry_strategy=read_retry_strategy())
 
 
 def zone_id_value(value):
@@ -55,22 +71,36 @@ def zone_id_value(value):
 class ReadOnlyDns:
     """Only list_zones/get_zone are used. Credentials are loaded on the first read."""
 
-    def __init__(self, settings, client_factory=make_client, dns_check=check):
+    def __init__(self, settings, client_factory=make_client, dns_check=check,
+                 clock=time.monotonic, sleep=time.sleep):
         self.settings = settings
         self._client_factory = client_factory
         self._client = None
         self._lock = threading.RLock()
         self._dns_check = dns_check
+        self._clock, self._sleep = clock, sleep
+        self._next_read_at = 0.0
 
     def _client_instance(self):
         if self._client is None:
             self._client = self._client_factory(self.settings)
         return self._client
 
+    def _read(self, method, *args, **kwargs):
+        with self._lock:
+            client = self._client_instance()
+            delay = max(0.0, self._next_read_at - self._clock())
+            if delay:
+                self._sleep(delay)
+            try:
+                return getattr(client, method)(*args, **kwargs)
+            finally:
+                # Pace after both successful and failed reads, including SDK retries.
+                self._next_read_at = self._clock() + self.settings.api_delay
+
     def _zone(self, zone_id):
         zone_id = zone_id_value(zone_id)
-        with self._lock:
-            zone = self._client_instance().get_zone(zone_id, scope="GLOBAL").data
+        zone = self._read("get_zone", zone_id, scope="GLOBAL").data
         if (zone.compartment_id != self.settings.compartment_id or
                 zone.zone_type != "SECONDARY" or zone.scope != "GLOBAL"):
             raise ReadError("Zone is outside the permitted public secondary DNS scope")
@@ -89,7 +119,7 @@ class ReadOnlyDns:
         if page is not None and (not isinstance(page, str) or not 1 <= len(page) <= 4096):
             raise ReadError("page must be a nonempty OCI next_page token")
         with self._lock:
-            response = self._client_instance().list_zones(
+            response = self._read("list_zones",
                 self.settings.compartment_id, zone_type="SECONDARY", scope="GLOBAL",
                 limit=limit, page=page)
             if len(response.data) > limit:
@@ -142,6 +172,9 @@ def tool_errors(function):
         except ReadError as exc:
             raise ToolError(str(exc)) from None
         except oci.exceptions.ServiceError as exc:
+            if exc.status == 429:
+                raise ToolError("OCI DNS is rate limiting reads (HTTP 429) after bounded retries. "
+                                "Wait before retrying; increase server --api-delay to 2 or use a smaller page.") from None
             raise ToolError(f"OCI DNS read failed (HTTP {exc.status}). Check read access, region and zone availability.") from None
         except Exception:
             raise ToolError("Read failed. Check the operator OCI profile, permissions and network connectivity.") from None
@@ -209,6 +242,8 @@ def main():
     parser.add_argument("--profile", default="DEFAULT")
     parser.add_argument("--region", help="Default: the selected OCI profile region")
     parser.add_argument("--config-file", default=str(Path.home() / ".oci" / "config"))
+    parser.add_argument("--api-delay", type=float, default=1.0,
+                        help="Seconds between OCI reads; default 1. Increase if throttled.")
     args = parser.parse_args()
     try:
         settings = Settings(**vars(args))

@@ -30,7 +30,13 @@ python -m unittest discover -s tests_mcp -v
 
 On 25 October 2026, all 42 existing tests and 16 MCP tests passed locally on macOS with Python 3.12.14 and MCP SDK 2.3.0. The MCP tests cover scoped and paginated reads, secret filtering, schema bounds, rejected extra arguments, DNS failure/concurrent-change handling, and the freshness-only proof boundary. They exercise both an in-process client and a real stdio subprocess handshake with no OCI credentials.
 
-The GitHub Actions workflow runs both suites on Linux and Windows with Python 3.11. The MCP server has not been exercised against a live OCI tenancy. Fake DNS/API responses establish application behavior, not actual DNS transfer success.
+The GitHub Actions workflow runs both suites on Linux and Windows with Python 3.11. Fake DNS/API responses establish application behavior, not actual DNS transfer success; subsequent live inventory evidence appears below.
+
+### Throttling fix, 25 October 2026
+
+The MCP suite now contains 24 tests. All 24 MCP tests and the 42 existing tests pass locally. Added coverage checks shared read pacing, finite delay settings, recovery from HTTP 429 through the actual OCI SDK, retry exhaustion after four attempts, non-retryable authentication/not-found errors, transient server errors and safe throttling messages. Mocked waits keep offline tests fast.
+
+Live MCP discovery, listing and inspection have also succeeded against the selected tenant's public secondary zones. After the throttling fix, the exact terminal command `python local/mcp_terminal_test.py list --limit 10` returned all ten zones with a null continuation token. The local terminal client and tenant settings remain ignored and unpublished. That inventory evidence does not establish SOA/TXT verification, target AXFR success or upstream transfer selection.
 
 ## Live acceptance criteria
 
